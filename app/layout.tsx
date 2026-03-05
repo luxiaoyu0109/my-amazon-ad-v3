@@ -35,4 +35,5 @@ export async function POST(request: Request) {
     console.error('AI服务错误:', error);
     return NextResponse.json({ error: 'AI 诊断服务异常' }, { status: 500 });
   }
+
 }

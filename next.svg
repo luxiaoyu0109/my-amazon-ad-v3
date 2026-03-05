@@ -1,0 +1,292 @@
+'use client';
+
+import React, { useState, useMemo, useRef } from 'react';
+import { 
+  TrendingUp, TrendingDown, DollarSign, Activity, ShoppingCart, 
+  MousePointerClick, Eye, AlertCircle, CheckCircle, Package, 
+  LayoutDashboard, ChevronRight, PlusCircle, Filter, LineChart as LineChartIcon,
+  Sparkles, Loader2, Bot, Download, Upload
+} from 'lucide-react';
+import { 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, 
+  Legend, ResponsiveContainer 
+} from 'recharts';
+
+// --- 新增：为了满足 TypeScript 的严格要求，我们在这里定义数据类型 ---
+interface AdRecord {
+  id: number;
+  timestamp: number;
+  productName: string;
+  targetName: string;
+  dateStr: string;
+  timePeriod: string;
+  spendNum: number;
+  salesNum: number;
+  clicksNum: number;
+  impressionsNum: number;
+  ordersNum: number;
+  bidNum: number;
+  cpc: string | number;
+  acos: string | number;
+  roas: string | number;
+  ctr: string | number;
+  cvr: string | number;
+}
+
+const INITIAL_PRODUCTS: string[] = ['降噪耳机'];
+const INITIAL_CAMPAIGNS: Record<string, string[]> = { '降噪耳机': ['SP-大词精准', 'SBV-视频广告'] };
+
+export default function Home() {
+  const [activeTab, setActiveTab] = useState<string>('ALL');
+  const [products, setProducts] = useState<string[]>(INITIAL_PRODUCTS);
+  const [campaigns, setCampaigns] = useState<Record<string, string[]>>(INITIAL_CAMPAIGNS);
+  const [records, setRecords] = useState<AdRecord[]>([]);
+  
+  const [formData, setFormData] = useState({
+    productName: '', targetName: '',
+    dateInput: new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+    timePeriod: '上午', bid: '', spend: '', sales: '', impressions: '', clicks: '', orders: ''
+  });
+
+  const [aiInsight, setAiInsight] = useState<string>('');
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 加上了 React 的事件类型，红线就会消失
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const { productName, targetName, spend, sales, bid, clicks, impressions, orders, dateInput, timePeriod } = formData;
+    
+    if (!productName.trim() || !targetName.trim() || !spend || !sales) return alert("请填写必要信息！");
+
+    const pName = productName.trim(); const cName = targetName.trim();
+    if (!products.includes(pName)) setProducts(prev => [...prev, pName]);
+    setCampaigns(prev => {
+      const existingCamps = prev[pName] || [];
+      if (!existingCamps.includes(cName)) return { ...prev, [pName]: [...existingCamps, cName] };
+      return prev;
+    });
+
+    const spendNum = parseFloat(spend) || 0; const salesNum = parseFloat(sales) || 0;
+    const clicksNum = parseInt(clicks) || 0; const impressionsNum = parseInt(impressions) || 0;
+    const ordersNum = parseInt(orders) || 0; const bidNum = parseFloat(bid) || 0;
+
+    const newRecord: AdRecord = {
+      id: Date.now(), timestamp: Date.now(), productName: pName, targetName: cName,
+      dateStr: `${dateInput} ${timePeriod}`, timePeriod,
+      spendNum, salesNum, clicksNum, impressionsNum, ordersNum, bidNum,
+      cpc: clicksNum > 0 ? (spendNum / clicksNum).toFixed(2) : 0,
+      acos: salesNum > 0 ? ((spendNum / salesNum) * 100).toFixed(2) : (spendNum > 0 ? '100+' : 0),
+      roas: spendNum > 0 ? (salesNum / spendNum).toFixed(2) : 0,
+      ctr: impressionsNum > 0 ? ((clicksNum / impressionsNum) * 100).toFixed(2) : 0,
+      cvr: clicksNum > 0 ? ((ordersNum / clicksNum) * 100).toFixed(2) : 0
+    };
+
+    setRecords(prev => [newRecord, ...prev]);
+    setFormData(prev => ({ ...prev, targetName: '', bid: '', spend: '', sales: '', impressions: '', clicks: '', orders: '' }));
+  };
+
+  const handleExport = () => {
+    const backupData = { products, campaigns, records };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = `广告数据备份_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const result = event.target?.result as string;
+        const importedData = JSON.parse(result);
+        if (importedData.products) { setProducts(importedData.products); setCampaigns(importedData.campaigns); setRecords(importedData.records); }
+      } catch (error) { alert("读取文件时出错！"); }
+    };
+    reader.readAsText(file); e.target.value = '';
+  };
+
+  const handleAIAnalysis = async () => {
+    if (filteredRecords.length === 0) return alert("当前视图没有数据可供诊断！");
+    setIsAnalyzing(true); setAiInsight('');
+
+    try {
+      const dataSummary = filteredRecords.slice(0, 15).map((r: AdRecord) => 
+        `[${r.dateStr}] 产品:${r.productName}, 广告组:${r.targetName}, 竞价:$${r.bidNum}, 实际CPC:$${r.cpc}, 花费:$${r.spendNum}, 销售额:$${r.salesNum}, ACOS:${r.acos}%, 订单:${r.ordersNum}`
+      ).join('\n');
+
+      const prompt = `你是一位资深的亚马逊PPC广告操盘手。分析以下最新数据，给出3条具体、专业、可执行的优化建议（列出行动点带emoji）。\n数据：\n${dataSummary}`;
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+
+      if (!response.ok) throw new Error('请求失败');
+      const data = await response.json();
+      setAiInsight(data.result || "未能生成有效建议。");
+    } catch (error) { setAiInsight("⚠️ AI 诊断暂时不可用，请检查网络或后端设置。"); } 
+    finally { setIsAnalyzing(false); }
+  };
+
+  const filteredRecords = useMemo(() => {
+    if (activeTab === 'ALL') return records;
+    return records.filter((r: AdRecord) => r.productName === activeTab);
+  }, [records, activeTab]);
+
+  const summary = useMemo(() => {
+    let totalSpend = 0, totalSales = 0, totalOrders = 0, totalClicks = 0;
+    filteredRecords.forEach((r: AdRecord) => { totalSpend += r.spendNum; totalSales += r.salesNum; totalOrders += r.ordersNum; totalClicks += r.clicksNum; });
+    const avgAcos = totalSales > 0 ? ((totalSpend / totalSales) * 100).toFixed(2) : (totalSpend > 0 ? '100+' : 0);
+    const avgCpc = totalClicks > 0 ? (totalSpend / totalClicks).toFixed(2) : 0;
+    return { totalSpend, totalSales, totalOrders, avgAcos, avgCpc };
+  }, [filteredRecords]);
+
+  const chartData = useMemo(() => {
+    const grouped: Record<string, any> = {};
+    const sortedRecords = [...filteredRecords].sort((a: AdRecord, b: AdRecord) => a.timestamp - b.timestamp);
+    sortedRecords.forEach((r: AdRecord) => {
+      const key = r.dateStr;
+      if (!grouped[key]) grouped[key] = { time: key, spend: 0, sales: 0, orders: 0 };
+      grouped[key].spend += r.spendNum; grouped[key].sales += r.salesNum; grouped[key].orders += r.ordersNum;
+    });
+    return Object.values(grouped);
+  }, [filteredRecords]);
+
+  const getAcosColor = (acosValue: string | number) => {
+    if (acosValue === '100+' || parseFloat(acosValue as string) > 35) return 'text-red-600 font-bold bg-red-50 px-2 py-1 rounded';
+    if (parseFloat(acosValue as string) > 20) return 'text-yellow-600 font-bold bg-yellow-50 px-2 py-1 rounded';
+    return 'text-green-600 font-bold bg-green-50 px-2 py-1 rounded';
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-50 font-sans overflow-hidden">
+      <div className="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 flex-shrink-0">
+        <div className="p-5 bg-slate-950 border-b border-slate-800">
+          <h1 className="text-lg font-bold text-white flex items-center gap-2"><LineChartIcon className="text-purple-500" /> AdMatrix V4</h1>
+          <p className="text-xs text-slate-500 mt-1">云端安全部署版</p>
+        </div>
+        <div className="flex-1 overflow-y-auto py-4">
+          <button onClick={() => setActiveTab('ALL')} className={`w-full flex items-center gap-3 px-5 py-3 text-sm transition-colors ${activeTab === 'ALL' ? 'bg-purple-600 text-white font-medium border-l-4 border-purple-400' : 'hover:bg-slate-800 hover:text-white border-l-4 border-transparent'}`}>
+            <LayoutDashboard size={18} /> 全局大盘数据
+          </button>
+          <div className="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase flex justify-between"><span>我的产品线</span></div>
+          {products.map(productName => (
+            <button key={productName} onClick={() => { setActiveTab(productName); setFormData(prev => ({...prev, productName: productName})); }} className={`w-full flex items-center justify-between px-5 py-3 text-sm transition-colors ${activeTab === productName ? 'bg-slate-800 text-white font-medium border-l-4 border-purple-400' : 'hover:bg-slate-800 hover:text-white border-l-4 border-transparent'}`}>
+              <div className="flex items-center gap-3 truncate"><Package size={16} className={activeTab === productName ? 'text-purple-400' : 'text-slate-500'}/><span className="truncate">{productName}</span></div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <header className="bg-white px-8 py-4 border-b border-gray-200 flex justify-between items-center shadow-sm z-0">
+          <h2 className="text-xl font-bold text-gray-800">{activeTab === 'ALL' ? '🌍 全局总览' : `📦 ${activeTab} 专属看板`}</h2>
+          <div className="flex items-center gap-3">
+            <input type="file" accept=".json" style={{ display: 'none' }} ref={fileInputRef} onChange={handleImport} />
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-gray-600 hover:text-gray-900 px-2 py-2 text-sm font-medium"><Upload size={16} /> 导入</button>
+            <button onClick={handleExport} className="flex items-center gap-1.5 text-gray-600 hover:text-gray-900 px-2 py-2 text-sm font-medium"><Download size={16} /> 导出</button>
+            <div className="w-px h-6 bg-gray-200 mx-1"></div>
+            <button onClick={handleAIAnalysis} disabled={isAnalyzing} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm">
+              {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              {isAnalyzing ? '深度诊断中...' : '✨ AI 智能诊断'}
+            </button>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-6">
+          {aiInsight && (
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 rounded-xl shadow-sm border border-indigo-100 relative overflow-hidden">
+              <h3 className="font-bold text-indigo-900 flex items-center gap-2 mb-3"><Bot size={20} className="text-indigo-600"/> AI 广告总监建议</h3>
+              <div className="text-sm text-indigo-800 whitespace-pre-wrap leading-relaxed">{aiInsight}</div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 border-t-4 border-t-purple-500"><span className="text-gray-500 text-sm">花费</span><div className="text-2xl font-bold mt-1">${summary.totalSpend.toFixed(2)}</div></div>
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 border-t-4 border-t-teal-500"><span className="text-gray-500 text-sm">销售额</span><div className="text-2xl font-bold mt-1">${summary.totalSales.toFixed(2)}</div></div>
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 border-t-4 border-t-amber-500"><span className="text-gray-500 text-sm">ACOS</span><div className={`text-2xl font-bold mt-1 ${summary.avgAcos === '100+' || parseFloat(summary.avgAcos as string) > 30 ? 'text-red-600' : 'text-green-600'}`}>{summary.avgAcos}%</div></div>
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 border-t-4 border-t-blue-500"><span className="text-gray-500 text-sm">订单</span><div className="text-2xl font-bold mt-1">{summary.totalOrders}</div></div>
+          </div>
+
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><TrendingUp size={18} className="text-purple-600"/> 趋势图</h3>
+            {chartData.length > 0 ? (
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                    <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fontSize: 12}} dy={10} />
+                    <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{fontSize: 12}} />
+                    <Tooltip />
+                    <Legend />
+                    <Line yAxisId="left" type="monotone" dataKey="sales" name="销售额" stroke="#0d9488" strokeWidth={3} dot={{r: 4}} activeDot={{r: 6}} />
+                    <Line yAxisId="left" type="monotone" dataKey="spend" name="花费" stroke="#9333ea" strokeWidth={3} dot={{r: 4}} activeDot={{r: 6}} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (<div className="h-64 flex items-center justify-center text-gray-400 bg-gray-50 rounded-lg">暂无足够数据生成趋势图</div>)}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div className="xl:col-span-1 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden h-fit">
+              <div className="bg-purple-50 px-5 py-4 border-b border-purple-100"><h3 className="font-bold text-purple-900 flex items-center gap-2"><PlusCircle size={18}/> 智能录入</h3></div>
+              <form onSubmit={handleSubmit} className="p-5 space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="block text-xs font-semibold mb-1">产品</label><input type="text" name="productName" list="p-list" value={formData.productName} onChange={handleInputChange} className="w-full p-2 border rounded text-sm outline-none focus:border-purple-500"/><datalist id="p-list">{products.map(p=><option key={p} value={p}/>)}</datalist></div>
+                  <div><label className="block text-xs font-semibold mb-1">广告组</label><input type="text" name="targetName" list="c-list" value={formData.targetName} onChange={handleInputChange} className="w-full p-2 border rounded text-sm outline-none focus:border-purple-500"/><datalist id="c-list">{(campaigns[formData.productName]||[]).map(c=><option key={c} value={c}/>)}</datalist></div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="block text-xs text-gray-600 mb-1">日期</label><input type="text" name="dateInput" value={formData.dateInput} onChange={handleInputChange} className="w-full p-2 border rounded text-sm"/></div>
+                  <div><label className="block text-xs text-gray-600 mb-1">时段</label><select name="timePeriod" value={formData.timePeriod} onChange={handleInputChange} className="w-full p-2 border rounded text-sm"><option>上午</option><option>下午</option><option>晚上</option></select></div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="block text-xs text-gray-600 mb-1">花费</label><input type="number" step="0.01" name="spend" value={formData.spend} onChange={handleInputChange} className="w-full p-2 border rounded text-sm"/></div>
+                  <div><label className="block text-xs text-gray-600 mb-1">销售额</label><input type="number" step="0.01" name="sales" value={formData.sales} onChange={handleInputChange} className="w-full p-2 border rounded text-sm"/></div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="block text-xs text-purple-600 mb-1">Bid</label><input type="number" step="0.01" name="bid" value={formData.bid} onChange={handleInputChange} className="w-full p-2 border border-purple-200 bg-purple-50 rounded text-sm"/></div>
+                  <div className="grid grid-cols-3 gap-1">
+                    <div><label className="block text-[10px] text-gray-500 mb-1">曝光</label><input type="number" name="impressions" value={formData.impressions} onChange={handleInputChange} className="w-full p-2 border rounded text-xs px-1"/></div>
+                    <div><label className="block text-[10px] text-gray-500 mb-1">点击</label><input type="number" name="clicks" value={formData.clicks} onChange={handleInputChange} className="w-full p-2 border rounded text-xs px-1"/></div>
+                    <div><label className="block text-[10px] text-gray-500 mb-1">订单</label><input type="number" name="orders" value={formData.orders} onChange={handleInputChange} className="w-full p-2 border rounded text-xs px-1"/></div>
+                  </div>
+                </div>
+                <button type="submit" className="w-full bg-slate-900 text-white py-3 rounded-lg text-sm shadow-md hover:bg-slate-800">保存记录</button>
+              </form>
+            </div>
+
+            <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+              <div className="bg-gray-50 px-5 py-4 border-b border-gray-200"><h3 className="font-bold text-gray-800 flex items-center gap-2"><LayoutDashboard size={18}/> 历史流水账</h3></div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left whitespace-nowrap">
+                  <thead className="bg-white text-gray-500 border-b border-gray-100 text-xs uppercase">
+                    <tr><th className="p-4 font-medium">产品/时间</th><th className="p-4 font-medium">广告活动</th><th className="p-4 font-medium">ACOS</th><th className="p-4 font-medium">Bid / CPC</th><th className="p-4 font-medium">花费 / 产出</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredRecords.map((r: AdRecord) => (
+                      <tr key={r.id} className="hover:bg-purple-50/50">
+                        <td className="p-4"><div className="font-semibold text-xs">{r.productName}</div><div className="text-[10px] text-gray-400">{r.dateStr}</div></td>
+                        <td className="p-4"><div className="font-medium">{r.targetName}</div><div className="text-[10px] text-gray-500">转化: {r.cvr}%</div></td>
+                        <td className="p-4"><span className={getAcosColor(r.acos)}>{r.acos}%</span></td>
+                        <td className="p-4"><span className="text-purple-600 font-semibold">${r.bidNum.toFixed(2)}</span> / <span>${r.cpc}</span></td>
+                        <td className="p-4"><div className="font-medium">${r.spendNum.toFixed(2)}</div><div className="text-[10px] text-teal-600">+ ${r.salesNum.toFixed(2)}</div></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
